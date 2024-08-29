@@ -39,7 +39,7 @@ emoji_to_role = {
     "🔌": "fonte",
     "📱": "smartphone",
     "🎙️": "microfone",
-    "👓": "acessorios",
+    "👓": "acessórios",
     "👩‍👦": "placa mãe",
     "🆒": "cooler",
     "⏹️": "processador"
@@ -163,7 +163,7 @@ async def on_message(message):
         "fonte": "fonte",
         "smartphone": "smartphone",
         "microfone": "microfone",
-        "acessórios": "acessorios",
+        "acessórios": "acessórios",
         "placa mãe": "placa mãe",
         "cooler": "cooler",
         "processador": "processador"

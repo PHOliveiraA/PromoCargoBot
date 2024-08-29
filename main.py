@@ -33,9 +33,16 @@ emoji_to_role = {
     "⌨️": "teclado",
     "📨": "cupom",
     "🗄️": "gabinete",
-    "📼": "placa de video",
+    "📼": "placa de vídeo",
     "🪢": "filtro de linha",
-    "📝": "memória"
+    "📝": "memória",
+    "🔌": "fonte",
+    "📱": "smartphone",
+    "🎙️": "microfone",
+    "👓": "acessorios",
+    "👩‍👦": "placa mãe",
+    "🆒": "cooler",
+    "⏹️": "processador"
 }
 
 async def condicoes(reaction):
@@ -150,9 +157,16 @@ async def on_message(message):
         "teclado": "teclado",   # Substitua pelo nome do cargo
         "gabinete": "gabinete",   # Substitua pelo nome do cargo
         "@cupom": "cupom",   # Substitua pelo nome do cargo
-        "placa de video": "placa de video",   # Substitua pelo nome do cargo
+        "placa de vídeo": "placa de vídeo",   # Substitua pelo nome do cargo
         "filtro de linha": "filtro de linha",   # Substitua pelo nome do cargo
         "memória": "memória",   # Substitua pelo nome do cargo
+        "fonte": "fonte",
+        "smartphone": "smartphone",
+        "microfone": "microfone",
+        "acessórios": "acessorios",
+        "placa mãe": "placa mãe",
+        "cooler": "cooler",
+        "processador": "processador"
     }
 
     if str(message.channel.name) in channels:

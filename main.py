@@ -42,7 +42,8 @@ emoji_to_role = {
     "👓": "acessórios",
     "👩‍👦": "placa mãe",
     "🆒": "cooler",
-    "⏹️": "processador"
+    "⏹️": "processador",
+    "🍀": "Sorteio"
 }
 
 async def condicoes(reaction):
@@ -153,20 +154,21 @@ async def on_message(message):
         print(f"{message.author}: {message.content}")
 
     keyword_responses = {
-        "monitor": "monitor",  # Substitua pelo nome do cargo
-        "teclado": "teclado",   # Substitua pelo nome do cargo
-        "gabinete": "gabinete",   # Substitua pelo nome do cargo
+        "@monitor": "monitor",  # Substitua pelo nome do cargo
+        "@teclado": "teclado",   # Substitua pelo nome do cargo
+        "@gabinete": "gabinete",   # Substitua pelo nome do cargo
         "@cupom": "cupom",   # Substitua pelo nome do cargo
-        "placa de vídeo": "placa de vídeo",   # Substitua pelo nome do cargo
-        "filtro de linha": "filtro de linha",   # Substitua pelo nome do cargo
-        "memória": "memória",   # Substitua pelo nome do cargo
-        "fonte": "fonte",
-        "smartphone": "smartphone",
-        "microfone": "microfone",
-        "acessórios": "acessórios",
-        "placa mãe": "placa mãe",
-        "cooler": "cooler",
-        "processador": "processador"
+        "@placa de vídeo": "placa de vídeo",   # Substitua pelo nome do cargo
+        "@filtro de linha": "filtro de linha",   # Substitua pelo nome do cargo
+        "@memória": "memória",   # Substitua pelo nome do cargo
+        "@fonte": "fonte",
+        "@smartphone": "smartphone",
+        "@microfone": "microfone",
+        "@acessórios": "acessórios",
+        "@placa mãe": "placa mãe",
+        "@air / water / fan cooler": "cooler",
+        "@processador": "processador",
+        "sorteio": "Sorteio"
     }
 
     if str(message.channel.name) in channels:

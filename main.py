@@ -6,7 +6,6 @@ import asyncio
 import yt_dlp
 
 # ======== CONFIGURAÇÕES INICIAIS ========
-
 intents = discord.Intents.default()
 intents.message_content = True
 intents.guilds = True
@@ -19,7 +18,6 @@ load_dotenv()
 Meu_token = os.getenv("DISCORD_TOKEN")
 
 # ======== DICIONÁRIO DE CARGOS ========
-
 emoji_to_role = {
     "📺": "monitor",
     "⌨️": "teclado",
@@ -39,7 +37,6 @@ emoji_to_role = {
 }
 
 # ======== FUNÇÕES AUXILIARES ========
-
 async def clear_old_setup_messages(channel):
     async for message in channel.history(limit=100):
         try:
@@ -57,7 +54,6 @@ async def condicoes(reaction):
     return None
 
 # ======== COMANDO DE SETUP ========
-
 @bot.command()
 async def setup(ctx):
     channels = ["cargo-de-promoção-aqui"]
@@ -73,7 +69,6 @@ async def setup(ctx):
             await message.add_reaction(emoji)
 
 # ======== EVENTOS DE REAÇÃO ========
-
 @bot.event
 async def on_reaction_add(reaction, user):
     if user == bot.user:
@@ -97,7 +92,6 @@ async def on_reaction_remove(reaction, user):
             print(f'Cargo {role.name} removido de {user.name}')
 
 # ======== SISTEMA DE MÚSICA ========
-
 musica_filas = {}
 
 def get_guild_queue(guild):
@@ -105,28 +99,75 @@ def get_guild_queue(guild):
         musica_filas[guild.id] = []
     return musica_filas[guild.id]
 
+# ======== FUNÇÃO AUXILIAR PARA OBTER ÁUDIO ========
+async def obter_audio(url):
+    # converte YouTube para Piped
+    if "youtube.com" in url or "youtu.be" in url:
+        video_id = url.split("v=")[-1] if "v=" in url else url.split("/")[-1]
+        url = f"https://piped.video/watch?v={video_id}"
+
+    ydl_opts = {
+        'format': 'bestaudio/best',
+        'quiet': True,
+        'noplaylist': True,
+        'nocheckcertificate': True,
+        'ignoreerrors': True,
+        'geo_bypass': True,
+        'source_address': '0.0.0.0'
+    }
+
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        info = ydl.extract_info(url, download=False)
+        return info.get('url'), info.get('title', 'Música desconhecida')
+
+# ======== FUNÇÃO DE TOCAR MÚSICA ========
 async def tocar_proxima_musica(ctx):
     queue = get_guild_queue(ctx.guild)
     if not queue:
-        await ctx.send("🎵 Fila de músicas vazia. Saindo do canal de voz.")
-        await ctx.voice_client.disconnect()
+        await ctx.send("🎵 Fila de músicas vazia.")
         return
 
     musica_atual = queue.pop(0)
     url = musica_atual["url"]
     titulo = musica_atual["title"]
 
-    ydl_opts = {'format': 'bestaudio', 'quiet': True}
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        info = ydl.extract_info(url, download=False)
-        audio_url = info['url']
+    try:
+        audio_url, titulo_real = await obter_audio(url)
+    except Exception as e:
+        await ctx.send(f"❌ Erro ao obter áudio: {e}")
+        return
 
-    ctx.voice_client.stop()
-    source = await discord.FFmpegOpusAudio.from_probe(audio_url, **{'options': '-vn'})
-    ctx.voice_client.play(source, after=lambda e: asyncio.run_coroutine_threadsafe(tocar_proxima_musica(ctx), bot.loop))
+    if not audio_url:
+        await ctx.send("❌ Não foi possível obter o áudio da música.")
+        return
 
-    await ctx.send(f"🎶 Tocando agora: **{titulo}**")
+    if not ctx.voice_client or not ctx.voice_client.is_connected():
+        try:
+            await ctx.author.voice.channel.connect()
+        except Exception:
+            return
 
+    if ctx.voice_client.is_playing() or ctx.voice_client.is_paused():
+        ctx.voice_client.stop()
+
+    try:
+        # Streaming contínuo com reconexão
+        ffmpeg_options = {
+            'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5',
+            'options': '-vn'
+        }
+        source = discord.FFmpegPCMAudio(audio_url, **ffmpeg_options)
+        ctx.voice_client.play(
+            source,
+            after=lambda e: asyncio.run_coroutine_threadsafe(
+                tocar_proxima_musica(ctx), bot.loop
+            )
+        )
+        await ctx.send(f"🎶 Tocando agora: **{titulo_real}**")
+    except Exception as e:
+        await ctx.send(f"❌ Erro ao tocar música: {e}")
+
+# ======== COMANDOS DE MÚSICA ========
 @bot.command()
 async def play(ctx, *, url):
     voice_channel = ctx.author.voice.channel if ctx.author.voice else None
@@ -137,16 +178,16 @@ async def play(ctx, *, url):
     if not ctx.voice_client:
         await voice_channel.connect()
 
-    ydl_opts = {'format': 'bestaudio', 'quiet': True}
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        info = ydl.extract_info(url, download=False)
-        titulo = info.get("title", "Música desconhecida")
+    try:
+        audio_url, titulo = await obter_audio(url)
+    except Exception as e:
+        await ctx.send(f"❌ Erro ao processar URL: {e}")
+        return
 
     queue = get_guild_queue(ctx.guild)
     queue.append({"url": url, "title": titulo})
 
     await ctx.send(f"✅ **{titulo}** adicionada à fila!")
-
     if not ctx.voice_client.is_playing():
         await tocar_proxima_musica(ctx)
 
@@ -188,12 +229,10 @@ async def queue(ctx):
         await ctx.send(f"📜 **Fila atual:**\n{msg}")
 
 # ======== EVENTO DE MENSAGENS ========
-
 @bot.event
 async def on_message(message):
     if message.author == bot.user:
         return
-
     await bot.process_commands(message)
 
     if str(message.channel.name) == "promos":
@@ -222,7 +261,6 @@ async def on_message(message):
                     await message.channel.send(f"<@&{role.id}>")
 
 # ======== EXECUTAR BOT ========
-
 try:
     bot.run(Meu_token)
 except discord.errors.DiscordServerError as e:

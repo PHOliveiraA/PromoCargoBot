@@ -105,27 +105,72 @@ def get_guild_queue(guild):
         musica_filas[guild.id] = []
     return musica_filas[guild.id]
 
+# ======== FUNÇÃO DE TOCAR MÚSICA CORRIGIDA ========
+
 async def tocar_proxima_musica(ctx):
     queue = get_guild_queue(ctx.guild)
     if not queue:
         await ctx.send("🎵 Fila de músicas vazia. Saindo do canal de voz.")
-        await ctx.voice_client.disconnect()
+        if ctx.voice_client:
+            await ctx.voice_client.disconnect()
         return
+
+    # FIX: garantir que ainda está conectado
+    if not ctx.voice_client or not ctx.voice_client.is_connected():
+        try:
+            voice_channel = ctx.author.voice.channel
+            await voice_channel.connect()
+            await ctx.send("🔁 Reconectado ao canal de voz.")
+        except Exception as e:
+            await ctx.send(f"❌ Erro ao reconectar: {e}")
+            return
 
     musica_atual = queue.pop(0)
     url = musica_atual["url"]
     titulo = musica_atual["title"]
 
-    ydl_opts = {'format': 'bestaudio', 'quiet': True}
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        info = ydl.extract_info(url, download=False)
-        audio_url = info['url']
+    ydl_opts = {
+        'format': 'bestaudio/best',
+        'quiet': True,
+        'noplaylist': True,
+        'nocheckcertificate': True,
+        'source_address': '0.0.0.0',
+        'extract_flat': False,
+        'ignoreerrors': True,
+        'geo_bypass': True,
+        'cookiesfrombrowser': None
+    }
 
-    ctx.voice_client.stop()
-    source = await discord.FFmpegOpusAudio.from_probe(audio_url, **{'options': '-vn'})
-    ctx.voice_client.play(source, after=lambda e: asyncio.run_coroutine_threadsafe(tocar_proxima_musica(ctx), bot.loop))
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+            audio_url = info.get('url')
+    except Exception as e:
+        await ctx.send(f"❌ Erro ao obter áudio: {e}")
+        return
 
-    await ctx.send(f"🎶 Tocando agora: **{titulo}**")
+    if not audio_url:
+        await ctx.send("❌ Não foi possível obter o áudio da música.")
+        return
+
+    # FIX: impedir conflito entre streams anteriores
+    if ctx.voice_client.is_playing() or ctx.voice_client.is_paused():
+        ctx.voice_client.stop()
+
+    try:
+        source = await discord.FFmpegOpusAudio.from_probe(audio_url, **{'options': '-vn'})
+        ctx.voice_client.play(
+            source,
+            after=lambda e: asyncio.run_coroutine_threadsafe(
+                tocar_proxima_musica(ctx),
+                bot.loop
+            )
+        )
+        await ctx.send(f"🎶 Tocando agora: **{titulo}**")
+    except Exception as e:
+        await ctx.send(f"❌ Erro ao tocar música: {e}")
+
+# ======== COMANDOS DE MÚSICA ========
 
 @bot.command()
 async def play(ctx, *, url):
@@ -137,10 +182,23 @@ async def play(ctx, *, url):
     if not ctx.voice_client:
         await voice_channel.connect()
 
-    ydl_opts = {'format': 'bestaudio', 'quiet': True}
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        info = ydl.extract_info(url, download=False)
-        titulo = info.get("title", "Música desconhecida")
+    ydl_opts = {
+        'format': 'bestaudio/best',
+        'quiet': True,
+        'noplaylist': True,
+        'nocheckcertificate': True,
+        'ignoreerrors': True,
+        'geo_bypass': True,
+        'cookiesfrombrowser': None
+    }
+
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+            titulo = info.get("title", "Música desconhecida")
+    except Exception as e:
+        await ctx.send(f"❌ Erro ao processar URL: {e}")
+        return
 
     queue = get_guild_queue(ctx.guild)
     queue.append({"url": url, "title": titulo})

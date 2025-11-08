@@ -4,6 +4,8 @@ FROM python:3.12-slim
 # Define o diretório de trabalho dentro do contêiner
 WORKDIR app
 
+RUN apt update && apt install -y ffmpeg
+
 # Copia o arquivo requirements.txt (onde você lista suas dependências) para o diretório de trabalho no contêiner
 COPY requirements.txt .
 

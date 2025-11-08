@@ -100,119 +100,136 @@ def get_guild_queue(guild):
         musica_filas[guild.id] = []
     return musica_filas[guild.id]
 
-# ======== NOVA FUNÇÃO OBTER ÁUDIO (COM BYPASS MELHORADO) ========
+# ======== NOVA FUNÇÃO OBTER ÁUDIO (VIA PROXY PIPED) ========
 async def obter_audio(url_ou_termo):
+    # --- ESTÁGIO 1: Redirecionar para Piped ---
+    # Em vez de ir direto no YouTube, convertemos o link para um servidor Piped público.
+    # Isso faz com que o bloqueio de IP do YouTube não afete você diretamente.
+    
+    target_url = url_ou_termo
+    
+    # Se for link do YouTube, extrai o ID e monta link Piped
+    if "youtube.com" in url_ou_termo or "youtu.be" in url_ou_termo:
+        video_id = None
+        if "v=" in url_ou_termo:
+            video_id = url_ou_termo.split("v=")[1].split("&")[0]
+        elif "youtu.be" in url_ou_termo:
+            video_id = url_ou_termo.split("/")[-1].split("?")[0]
+            
+        if video_id:
+            target_url = f"https://piped.video/watch?v={video_id}"
+
+    # Se não for link nenhum, assume que é pesquisa e pesquisa no Piped
+    elif not url_ou_termo.startswith("http"):
+        # Pesquisa simples no Piped
+        target_url = f"https://piped.video/results?search_query={url_ou_termo.replace(' ', '+')}"
+
+    # --- ESTÁGIO 2: Configuração do yt-dlp ---
+# ======== FUNÇÃO OBTER ÁUDIO (STREAMING COM COOKIES) ========
+async def obter_audio(url_ou_termo):
+    tem_cookies = os.path.exists("cookies.txt")
+    
     ydl_opts = {
         'format': 'bestaudio/best',
         'quiet': True,
         'noplaylist': True,
         'nocheckcertificate': True,
-        'ignoreerrors': True,  # Permite falhar e tentar o fallback
+        'ignoreerrors': True,
         'geo_bypass': True,
         'source_address': '0.0.0.0',
         'force_ipv4': True,
-        # --- Travas de Privacidade/Segurança ---
-        'no_cookies': True,
-        'no_cache_dir': True,
         'ignoreconfig': True,
-        # --- Tentativa de Bypass de Cliente ---
-        # Tenta voltar para o android se o web_embedded estiver falhando com Error 153
+        'cookiefile': 'cookies.txt' if tem_cookies else None,
+        # SEGREDO: Se passar por uma TV antiga.
+        # TVs antigas não suportam SABR, então o YouTube manda o link direto sem frescura.
         'extractor_args': {
             'youtube': {
-                'player_client': ['android', 'ios']
+                'player_client': ['tv_embedded']
             }
         }
     }
 
+    if not tem_cookies:
+        ydl_opts.update({'no_cookies': True, 'no_cache_dir': True})
+
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         info = None
-        # Tenta extrair diretamente primeiro
         try:
-            # Se não for um link, ele já vai falhar aqui e cair no except (que é o que queremos para buscas)
+            # download=False é crucial para streaming
             info = ydl.extract_info(url_ou_termo, download=False)
         except Exception:
             pass
 
-        # Se falhou ou veio vazio (bloqueio do YouTube frequentemente retorna None em vez de erro)
         if not info:
-            print(f"Tentativa direta falhou para '{url_ou_termo}', tentando ytsearch...")
             try:
-                # Força uma pesquisa. Isso ajuda a contornar bloqueios em links diretos.
-                busca = ydl.extract_info(f"ytsearch:{url_ou_termo}", download=False)
-                if 'entries' in busca and len(busca['entries']) > 0:
-                    info = busca['entries'][0]
-            except Exception as e:
-                print(f"Erro fatal no ytsearch: {e}")
+                info = ydl.extract_info(f"ytsearch:{url_ou_termo}", download=False)
+                if 'entries' in info:
+                    info = info['entries'][0]
+            except Exception:
                 return None, None
 
         if not info:
             return None, None
 
-        # Garante que temos uma URL jogável
-        url_audio = info.get('url')
-        if not url_audio:
-             # Fallback: procura nos formatos se a URL principal estiver vazia
-             for f in info.get('formats', []):
-                 if f.get('acodec') != 'none' and f.get('vcodec') == 'none':
-                     url_audio = f['url']
-                     break
+        return info.get('url'), info.get('title', 'Música')
 
-        return url_audio, info.get('title', 'Música desconhecida')
-
-# ======== FUNÇÃO DE TOCAR MÚSICA ========
+# ======== FUNÇÃO TOCAR (STREAMING ROBUSTO) ========
 async def tocar_proxima_musica(ctx):
     queue = get_guild_queue(ctx.guild)
     if not queue:
-        # await ctx.send("🎵 Fila de músicas vazia.") # Opcional: avisar quando acaba
         return
 
     musica_atual = queue.pop(0)
-    termo_busca = musica_atual["termo"] # Pode ser URL ou nome da música
+    termo_busca = musica_atual["termo"]
 
-    # Avisa que está processando (útil porque o yt-dlp pode demorar um pouco)
     msg_processando = await ctx.send(f"🔄 Processando: `{termo_busca}`...")
 
     try:
+        # Agora retorna uma URL de internet, não um arquivo local
         audio_url, titulo_real = await obter_audio(termo_busca)
     except Exception as e:
-        await msg_processando.edit(content=f"❌ Erro crítico ao obter áudio: {e}")
-        await tocar_proxima_musica(ctx) # Tenta a próxima
+        await msg_processando.edit(content=f"❌ Erro crítico: {e}")
+        await tocar_proxima_musica(ctx)
         return
 
     if not audio_url:
-        await msg_processando.edit(content=f"❌ Não foi possível tocar: `{termo_busca}` (Bloqueado pelo YouTube ou não encontrado).")
-        await tocar_proxima_musica(ctx) # Tenta a próxima
+        await msg_processando.edit(content="❌ Falha ao obter link de streaming.")
+        await tocar_proxima_musica(ctx)
         return
 
-    # Conecta se necessário
     if not ctx.voice_client or not ctx.voice_client.is_connected():
         try:
             if ctx.author.voice:
                 await ctx.author.voice.channel.connect()
             else:
-                 await msg_processando.edit(content="❌ Você não está em um canal de voz.")
+                 await msg_processando.edit(content="❌ Entre em um canal de voz primeiro.")
                  return
         except Exception:
-            return
+             return
 
     if ctx.voice_client.is_playing() or ctx.voice_client.is_paused():
         ctx.voice_client.stop()
 
+    # Opções do FFmpeg para aguentar quedas de conexão do YouTube
+    ffmpeg_options = {
+        'before_options': (
+            '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 '
+            '-reconnect_at_eof 1 -http_persistent 0'
+        ),
+        'options': '-vn'
+    }
+
+    def after_playing(error):
+        if error:
+            print(f"Erro no streaming: {error}")
+        asyncio.run_coroutine_threadsafe(tocar_proxima_musica(ctx), bot.loop)
+
     try:
-        ffmpeg_options = {
-            'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5',
-            'options': '-vn'
-        }
         source = discord.FFmpegPCMAudio(audio_url, **ffmpeg_options)
-        ctx.voice_client.play(
-            source,
-            after=lambda e: asyncio.run_coroutine_threadsafe(
-                tocar_proxima_musica(ctx), bot.loop
-            )
-        )
+        ctx.voice_client.play(source, after=after_playing)
         await msg_processando.edit(content=f"🎶 Tocando agora: **{titulo_real}**")
     except Exception as e:
-        await msg_processando.edit(content=f"❌ Erro ao iniciar reprodução: {e}")
+        await msg_processando.edit(content=f"❌ Erro ao iniciar player: {e}")
         await tocar_proxima_musica(ctx)
 
 # ======== COMANDOS DE MÚSICA ========

@@ -125,53 +125,63 @@ async def obter_audio(url_ou_termo):
         target_url = f"https://piped.video/results?search_query={url_ou_termo.replace(' ', '+')}"
 
     # --- ESTÁGIO 2: Configuração do yt-dlp ---
-# ======== FUNÇÃO OBTER ÁUDIO (STREAMING COM COOKIES) ========
+# ======== FUNÇÃO OBTER ÁUDIO (STREAMING INTELIGENTE - TENTA TUDO) ========
+# ======== FUNÇÃO OBTER ÁUDIO (SELEÇÃO INTELIGENTE DE CLIENTES) ========
 async def obter_audio(url_ou_termo):
     tem_cookies = os.path.exists("cookies.txt")
     
-    ydl_opts = {
-        'format': 'bestaudio/best',
-        'quiet': True,
-        'noplaylist': True,
-        'nocheckcertificate': True,
-        'ignoreerrors': True,
-        'geo_bypass': True,
-        'source_address': '0.0.0.0',
-        'force_ipv4': True,
-        'ignoreconfig': True,
-        'cookiefile': 'cookies.txt' if tem_cookies else None,
-        # SEGREDO: Se passar por uma TV antiga.
-        # TVs antigas não suportam SABR, então o YouTube manda o link direto sem frescura.
-        'extractor_args': {
-            'youtube': {
-                'player_client': ['tv_embedded']
+    # SEGREDO: Separamos os clientes.
+    # Com cookies: Usamos apenas os baseados em navegador (web, mweb, tv).
+    # Sem cookies: Tentamos os nativos (android, ios) que às vezes funcionam sem login.
+    if tem_cookies:
+        CLIENTES = ['web', 'mweb', 'tv_embedded']
+        print("🍪 Cookies detectados: Usando clientes WEB.")
+    else:
+        CLIENTES = ['android', 'ios', 'web', 'tv_embedded']
+        print("⚠️ Sem cookies: Tentando clientes NATIVOS primeiro.")
+
+    def buscar_em_background():
+        base_opts = {
+            'format': 'bestaudio/best',
+            'quiet': True,
+            'noplaylist': True,
+            'nocheckcertificate': True,
+            'ignoreerrors': True,
+            'geo_bypass': True,
+            'source_address': '0.0.0.0',
+            'force_ipv4': True,
+            'ignoreconfig': True,
+            'cookiefile': 'cookies.txt' if tem_cookies else None,
+            # Adiciona um User-Agent genérico para tentar enganar bloqueios simples
+            'http_headers': {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
             }
         }
-    }
 
-    if not tem_cookies:
-        ydl_opts.update({'no_cookies': True, 'no_cache_dir': True})
+        if not tem_cookies:
+            base_opts['no_cookies'] = True
 
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        info = None
-        try:
-            # download=False é crucial para streaming
-            info = ydl.extract_info(url_ou_termo, download=False)
-        except Exception:
-            pass
-
-        if not info:
+        for cliente in CLIENTES:
+            print(f"🔄 Tentando background com: {cliente}...")
+            current_opts = base_opts.copy()
+            current_opts['extractor_args'] = {'youtube': {'player_client': [cliente]}}
+            
             try:
-                info = ydl.extract_info(f"ytsearch:{url_ou_termo}", download=False)
-                if 'entries' in info:
-                    info = info['entries'][0]
+                with yt_dlp.YoutubeDL(current_opts) as ydl:
+                    if "youtube.com" in url_ou_termo or "youtu.be" in url_ou_termo:
+                        info = ydl.extract_info(url_ou_termo, download=False)
+                    else:
+                        res = ydl.extract_info(f"ytsearch:{url_ou_termo}", download=False)
+                        info = res['entries'][0] if 'entries' in res else None
+
+                if info and info.get('url'):
+                     print(f"✅ Sucesso background com {cliente}!")
+                     return info['url'], info.get('title', 'Música')
             except Exception:
-                return None, None
+                continue
+        return None, None
 
-        if not info:
-            return None, None
-
-        return info.get('url'), info.get('title', 'Música')
+    return await asyncio.to_thread(buscar_em_background)
 
 # ======== FUNÇÃO TOCAR (STREAMING ROBUSTO) ========
 async def tocar_proxima_musica(ctx):

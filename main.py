@@ -125,63 +125,64 @@ async def obter_audio(url_ou_termo):
         target_url = f"https://piped.video/results?search_query={url_ou_termo.replace(' ', '+')}"
 
     # --- ESTÁGIO 2: Configuração do yt-dlp ---
-# ======== FUNÇÃO OBTER ÁUDIO (STREAMING INTELIGENTE - TENTA TUDO) ========
-# ======== FUNÇÃO OBTER ÁUDIO (SELEÇÃO INTELIGENTE DE CLIENTES) ========
+# ======== FUNÇÃO OBTER ÁUDIO (MULTI-PLATAFORMA OTIMIZADA) ========
 async def obter_audio(url_ou_termo):
     tem_cookies = os.path.exists("cookies.txt")
-    
-    # SEGREDO: Separamos os clientes.
-    # Com cookies: Usamos apenas os baseados em navegador (web, mweb, tv).
-    # Sem cookies: Tentamos os nativos (android, ios) que às vezes funcionam sem login.
-    if tem_cookies:
-        CLIENTES = ['web', 'mweb', 'tv_embedded']
-        print("🍪 Cookies detectados: Usando clientes WEB.")
-    else:
-        CLIENTES = ['android', 'ios', 'web', 'tv_embedded']
-        print("⚠️ Sem cookies: Tentando clientes NATIVOS primeiro.")
+    eh_spotify = "spotify.com" in url_ou_termo
+    eh_soundcloud = "soundcloud.com" in url_ou_termo
+    eh_youtube = "youtube.com" in url_ou_termo or "youtu.be" in url_ou_termo
+    eh_url = url_ou_termo.startswith("http")
 
-    def buscar_em_background():
-        base_opts = {
-            'format': 'bestaudio/best',
-            'quiet': True,
-            'noplaylist': True,
-            'nocheckcertificate': True,
-            'ignoreerrors': True,
-            'geo_bypass': True,
-            'source_address': '0.0.0.0',
-            'force_ipv4': True,
-            'ignoreconfig': True,
-            'cookiefile': 'cookies.txt' if tem_cookies else None,
-            # Adiciona um User-Agent genérico para tentar enganar bloqueios simples
-            'http_headers': {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-            }
-        }
+    ydl_opts = {
+        'format': 'bestaudio/best',
+        'quiet': True,
+        'noplaylist': True,
+        'nocheckcertificate': True,
+        'ignoreerrors': True,
+        'geo_bypass': True,
+        'source_address': '0.0.0.0',
+        'force_ipv4': True,
+        'ignoreconfig': True,
+    }
 
-        if not tem_cookies:
-            base_opts['no_cookies'] = True
+    if eh_youtube or (not eh_url and not eh_soundcloud):
+         if tem_cookies:
+             ydl_opts['cookiefile'] = 'cookies.txt'
+         else:
+             ydl_opts.update({'no_cookies': True})
 
-        for cliente in CLIENTES:
-            print(f"🔄 Tentando background com: {cliente}...")
-            current_opts = base_opts.copy()
-            current_opts['extractor_args'] = {'youtube': {'player_client': [cliente]}}
-            
+    # Função síncrona que será jogada para uma thread
+    def thread_extrair(alvo, usar_sc_fallback=False):
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             try:
-                with yt_dlp.YoutubeDL(current_opts) as ydl:
-                    if "youtube.com" in url_ou_termo or "youtu.be" in url_ou_termo:
-                        info = ydl.extract_info(url_ou_termo, download=False)
-                    else:
-                        res = ydl.extract_info(f"ytsearch:{url_ou_termo}", download=False)
-                        info = res['entries'][0] if 'entries' in res else None
-
-                if info and info.get('url'):
-                     print(f"✅ Sucesso background com {cliente}!")
-                     return info['url'], info.get('title', 'Música')
+                info = ydl.extract_info(alvo, download=False)
+                return info
             except Exception:
-                continue
+                if usar_sc_fallback:
+                     print(f"⚠️ Fallback para SoundCloud: {alvo}")
+                     try:
+                         # Tenta pesquisar o termo original no SC se o YT falhar
+                         termo_limpo = url_ou_termo.replace("ytsearch:", "")
+                         res = ydl.extract_info(f"scsearch:{termo_limpo}", download=False)
+                         if 'entries' in res: return res['entries'][0]
+                     except: return None
+                return None
+
+    info = None
+    if eh_spotify:
+        # Tenta pesquisar o link do spotify no YT/SC
+        info = await asyncio.to_thread(thread_extrair, f"ytsearch:{url_ou_termo}", True)
+    elif eh_url:
+        # Se for URL direta (YT ou SC), tenta ela mesma, com fallback se for YT
+        info = await asyncio.to_thread(thread_extrair, url_ou_termo, eh_youtube)
+    else:
+        # Pesquisa normal de texto
+        info = await asyncio.to_thread(thread_extrair, f"ytsearch:{url_ou_termo}", True)
+
+    if not info or not info.get('url'):
         return None, None
 
-    return await asyncio.to_thread(buscar_em_background)
+    return info['url'], info.get('title', 'Música')
 
 # ======== FUNÇÃO TOCAR (STREAMING ROBUSTO) ========
 async def tocar_proxima_musica(ctx):

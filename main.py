@@ -3,7 +3,7 @@ from discord.ext import commands
 import os
 from dotenv import load_dotenv
 import asyncio
-import yt_dlp
+import wavelink  # Motor de áudio Lavalink
 import re
 
 # ======== CONFIGURAÇÕES INICIAIS ========
@@ -26,194 +26,128 @@ emoji_to_role = {
     "👩‍👦": "placa mãe", "🆒": "cooler", "⏹️": "processador", "🍀": "Sorteio"
 }
 
-# ======== CONFIGURAÇÕES DE MÚSICA (MODO VPS BLINDADO) ========
-YDL_OPTIONS = {
-    'format': 'bestaudio/best',
-    'noplaylist': True,
-    'quiet': True,
-    'no_warnings': True,
-    'nocheckcertificate': True,
-    'ignoreerrors': True,
-    'source_address': '0.0.0.0',
-    'force_ipv4': True,
-    'cookiefile': 'cookies.txt' if os.path.exists("cookies.txt") else None,
-    # O segredo para 2026: Combinar mweb com tv_embedded
-    'extractor_args': {
-        'youtube': {
-            'player_client': ['mweb', 'tv_embedded'],
-            'player_skip': ['webpage', 'configs'],
-        }
-    },
-    # Força o yt-dlp a aceitar qualquer formato de áudio disponível
-    'prefer_free_formats': False,
-}
+# ======== CONEXÃO COM O LAVALINK ========
 
-# CONFIGURAÇÃO DE PROTOCOLO TOTAL (A chave para o FFmpeg 7.1.3)
-FFMPEG_OPTIONS = {
-    'before_options': (
-        '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 '
-        '-protocol_whitelist crypto,data,file,http,https,tcp,tls,hls,applehttp ' # Whitelist completa
-        '-allowed_extensions ALL' # Permite os segmentos .opus do SoundCloud
-    ),
-    'options': '-vn',
-}
+async def setup_hook():
+    # 'uri' usa o nome do serviço definido no docker-compose (lavalink)
+    # password deve ser a mesma do application.yml
+    nodes = [wavelink.Node(uri='http://lavalink:2333', password='youshallnotpass')]
+    await wavelink.Pool.connect(nodes=nodes, client=bot, cache_capacity=100)
 
-musica_filas = {}
+bot.setup_hook = setup_hook
 
-def get_guild_queue(guild_id):
-    if guild_id not in musica_filas:
-        musica_filas[guild_id] = []
-    return musica_filas[guild_id]
-
-# ======== LÓGICA DE BUSCA COM TRATAMENTO DE ID ========
-
-async def obter_audio(url_ou_termo):
-    url_final = None
-    titulo_final = url_ou_termo
-
-    # 1. TENTATIVA YOUTUBE
-    try:
-        with yt_dlp.YoutubeDL(YDL_OPTIONS) as ydl:
-            alvo = url_ou_termo if url_ou_termo.startswith("http") else f"ytsearch1:{url_ou_termo}"
-            info = await asyncio.to_thread(ydl.extract_info, alvo, download=False)
-            
-            if info and 'entries' in info:
-                info = info['entries'][0]
-            
-            if info and 'url' in info:
-                url_final = info['url']
-                titulo_final = info.get('title', url_ou_termo)
-                print(f"✅ Sucesso YouTube: {titulo_final}")
-    except Exception as e:
-        print(f"❌ YouTube bloqueou/erro: {e}")
-
-    # 2. FALLBACK SOUNDCLOUD (PARA QUANDO O YT DÁ 'FORMAT NOT AVAILABLE')
-    if not url_final:
-        # Se o YouTube bloqueou, pegamos o ID do vídeo para buscar EXATAMENTE ele no SoundCloud
-        termo_sc = titulo_final
-        if "youtube.com" in termo_sc or "youtu.be" in termo_sc:
-            vid_id = re.search(r"(?:v=|\/)([0-9A-Za-z_-]{11})", termo_sc)
-            termo_sc = vid_id.group(1) if vid_id else "musica"
-
-        print(f"⚠️ Usando fallback: Buscando '{termo_sc}' no SoundCloud...")
-        try:
-            with yt_dlp.YoutubeDL({'format': 'bestaudio', 'quiet': True}) as ydl_sc:
-                info_sc = await asyncio.to_thread(ydl_sc.extract_info, f"scsearch1:{termo_sc}", download=False)
-                if info_sc and 'entries' in info_sc:
-                    res = info_sc['entries'][0]
-                    url_final = res['url']
-                    titulo_final = res.get('title', termo_sc)
-                    print(f"✅ Sucesso SoundCloud: {titulo_final}")
-        except Exception as e_sc:
-            print(f"❌ Erro SoundCloud: {e_sc}")
-
-    return url_final, titulo_final
-
-# ======== PLAYER PRINCIPAL ========
-
-async def tocar_proxima_musica(ctx):
-    queue = get_guild_queue(ctx.guild.id)
-    if not queue: return
-
-    musica_atual = queue.pop(0)
-    termo = musica_atual["termo"]
-    msg_status = await ctx.send(f"🔍 Processando: `{termo}`...")
-
-    url_final, titulo_final = await obter_audio(termo)
-
-    if not url_final:
-        await msg_status.edit(content="❌ Erro: Não foi possível obter o áudio de nenhuma fonte.")
-        return await tocar_proxima_musica(ctx)
-
-    def after_playing(error):
-        if error: print(f"Erro no player: {error}")
-        asyncio.run_coroutine_threadsafe(tocar_proxima_musica(ctx), bot.loop)
-
-    try:
-        # Criando o player com as flags injetadas diretamente
-        source = discord.FFmpegPCMAudio(
-            url_final,
-            before_options=FFMPEG_OPTIONS['before_options'],
-            options=FFMPEG_OPTIONS['options']
-        )
-        ctx.voice_client.play(source, after=after_playing)
-        await msg_status.edit(content=f"🎶 Tocando agora: **{titulo_final}**")
-    except Exception as e:
-        print(f"Erro FFmpeg 7.1: {e}")
-        await msg_status.edit(content="❌ Erro ao iniciar áudio. Pulando...")
-        await tocar_proxima_musica(ctx)
-
-# ======== COMANDOS DO BOT ========
+# ======== COMANDOS DE MÚSICA (WAVELINK) ========
 
 @bot.command(aliases=['p'])
-async def play(ctx, *, termo):
+async def play(ctx, *, busca: str):
+    """Toca uma música do YouTube ou SoundCloud via Lavalink"""
     if not ctx.author.voice:
-        return await ctx.send("❌ Entre em um canal de voz primeiro.")
+        return await ctx.send("❌ Você precisa estar em um canal de voz.")
+
+    # Conecta ao canal ou obtém o player existente
     if not ctx.voice_client:
-        await ctx.author.voice.channel.connect()
-
-    get_guild_queue(ctx.guild.id).append({"termo": termo})
-
-    if not ctx.voice_client.is_playing():
-        await tocar_proxima_musica(ctx)
+        vc: wavelink.Player = await ctx.author.voice.channel.connect(cls=wavelink.Player)
     else:
-        await ctx.send(f"✅ Adicionado à fila: `{termo}`")
+        vc: wavelink.Player = ctx.voice_client
+
+    # Faz a busca (Lavalink lida com a extração automaticamente)
+    # Por padrão, busca no YouTube, mas aceita links do SoundCloud
+    tracks = await wavelink.Playable.search(busca)
+    
+    if not tracks:
+        return await ctx.send("❌ Não encontrei nada com esse nome ou link.")
+
+    track = tracks[0]
+    await vc.play(track)
+    
+    embed = discord.Embed(title="🎶 Tocando Agora", description=f"**{track.title}**", color=discord.Color.blue())
+    if track.artwork:
+        embed.set_thumbnail(url=track.artwork)
+    
+    await ctx.send(embed=embed)
 
 @bot.command(aliases=['s'])
 async def skip(ctx):
-    if ctx.voice_client and ctx.voice_client.is_playing():
-        ctx.voice_client.stop()
-        await ctx.send("⏭️ Pulada!")
+    """Pula a música atual"""
+    vc: wavelink.Player = ctx.voice_client
+    if vc and vc.playing:
+        await vc.skip()
+        await ctx.send("⏭️ Música pulada!")
+    else:
+        await ctx.send("❌ Não há nada tocando para pular.")
 
 @bot.command()
 async def stop(ctx):
-    get_guild_queue(ctx.guild.id).clear()
-    if ctx.voice_client:
-        await ctx.voice_client.disconnect()
-    await ctx.send("🛑 Parado.")
+    """Para o player e desconecta o bot"""
+    vc: wavelink.Player = ctx.voice_client
+    if vc:
+        await vc.disconnect()
+        await ctx.send("🛑 Player parado e desconectado.")
 
-# ======== SISTEMA DE CARGOS ========
+# ======== SISTEMA DE CARGOS POR REAÇÃO ========
 
 @bot.command()
 async def setup(ctx):
+    """Configura a mensagem de reação para cargos"""
     if ctx.channel.name == "cargo-de-promoção-aqui":
+        # Limpa mensagens antigas do bot no canal
         async for m in ctx.channel.history(limit=50):
             if m.author == bot.user: await m.delete()
-        texto = "Reaja para obter os cargos:\n" + "\n".join([f"{e} - {r}" for e, r in emoji_to_role.items()])
+        
+        texto = "**Reaja aos emojis abaixo para receber notificações de promoções:**\n\n"
+        for emoji, role in emoji_to_role.items():
+            texto += f"{emoji} - {role}\n"
+        
         msg = await ctx.send(texto)
-        for emoji in emoji_to_role.keys(): await msg.add_reaction(emoji)
+        for emoji in emoji_to_role.keys():
+            await msg.add_reaction(emoji)
 
 @bot.event
 async def on_reaction_add(reaction, user):
     if user == bot.user: return
+    # Filtra pelo ID do canal de cargos
     if reaction.message.channel.id == 1267971255684960266:
         role_name = emoji_to_role.get(str(reaction.emoji))
-        role = discord.utils.get(reaction.message.guild.roles, name=role_name)
-        member = await reaction.message.guild.fetch_member(user.id)
-        if role: await member.add_roles(role)
+        if role_name:
+            role = discord.utils.get(reaction.message.guild.roles, name=role_name)
+            if role:
+                member = await reaction.message.guild.fetch_member(user.id)
+                await member.add_roles(role)
 
 @bot.event
 async def on_reaction_remove(reaction, user):
     if user == bot.user: return
     if reaction.message.channel.id == 1267971255684960266:
         role_name = emoji_to_role.get(str(reaction.emoji))
-        role = discord.utils.get(reaction.message.guild.roles, name=role_name)
-        member = await reaction.message.guild.fetch_member(user.id)
-        if role: await member.remove_roles(role)
+        if role_name:
+            role = discord.utils.get(reaction.message.guild.roles, name=role_name)
+            if role:
+                member = await reaction.message.guild.fetch_member(user.id)
+                await member.remove_roles(role)
+
+# ======== MONITOR DE PROMOÇÕES (TAGS AUTOMÁTICAS) ========
 
 @bot.event
 async def on_message(message):
     if message.author == bot.user: return
     await bot.process_commands(message)
+
+    # Monitora o canal de promoções para marcar os cargos
     if message.channel.name == "promos":
-        keywords = {"@monitor": "monitor", "@teclado": "teclado", "@gabinete": "gabinete", "sorteio": "Sorteio"}
-        for kw, rn in keywords.items():
-            if kw in message.content.lower():
-                role = discord.utils.get(message.guild.roles, name=rn)
-                if role: await message.channel.send(f"<@&{role.id}>")
+        keywords = {
+            "@monitor": "monitor", "@teclado": "teclado", "@gabinete": "gabinete",
+            "@cupom": "cupom", "@placa de vídeo": "placa de vídeo", "sorteio": "Sorteio"
+        }
+        content_lower = message.content.lower()
+        for kw, role_name in keywords.items():
+            if kw in content_lower:
+                role = discord.utils.get(message.guild.roles, name=role_name)
+                if role:
+                    await message.channel.send(f"<@&{role.id}>")
 
 @bot.event
 async def on_ready():
-    print(f'✅ Bot online: {bot.user}')
+    print(f'✅ Bot Online: {bot.user}')
+    print(f'🚀 Sistema de Música: Lavalink Node Conectado')
 
 bot.run(Meu_token)

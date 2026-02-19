@@ -1,0 +1,21 @@
+version: '3.8'
+
+services:
+  promocargobot:
+    build: .
+    container_name: promocargobot
+    depends_on:
+      - lavalink
+    env_file: .env
+    restart: always
+
+  lavalink:
+    image: ghcr.io/lavalink-devs/lavalink:4
+    container_name: lavalink
+    ports:
+      - "2333:2333"
+    environment:
+      - LAVALINK_SERVER_PASSWORD=youshallnotpass
+    volumes:
+      - ./lavalink/application.yml:/opt/lavalink/application.yml
+    restart: always

@@ -27,7 +27,6 @@ emoji_to_role = {
 }
 
 # ======== CONFIGURAÇÕES DE MÚSICA (MODO VPS BLINDADO) ========
-
 YDL_OPTIONS = {
     'format': 'bestaudio/best',
     'noplaylist': True,
@@ -38,8 +37,15 @@ YDL_OPTIONS = {
     'source_address': '0.0.0.0',
     'force_ipv4': True,
     'cookiefile': 'cookies.txt' if os.path.exists("cookies.txt") else None,
-    # Alternando para o cliente iOS, que costuma ser mais "gentil" com IPs de VPS
-    'extractor_args': {'youtube': {'player_client': ['ios', 'tv']}},
+    # O segredo para 2026: Combinar mweb com tv_embedded
+    'extractor_args': {
+        'youtube': {
+            'player_client': ['mweb', 'tv_embedded'],
+            'player_skip': ['webpage', 'configs'],
+        }
+    },
+    # Força o yt-dlp a aceitar qualquer formato de áudio disponível
+    'prefer_free_formats': False,
 }
 
 # CONFIGURAÇÃO DE PROTOCOLO TOTAL (A chave para o FFmpeg 7.1.3)

@@ -29,10 +29,9 @@ emoji_to_role = {
 # ======== CONEXÃO COM O LAVALINK ========
 
 async def setup_hook():
-    # 'uri' usa o nome do serviço definido no docker-compose (lavalink)
-    # password deve ser a mesma do application.yml
-    nodes = [wavelink.Node(uri='http://lavalink:8080', password='youshallnotpass')]
-    await wavelink.Pool.connect(nodes=nodes, client=bot, cache_capacity=100)
+    # O host é 'lavalink' (nome do container) e a porta é 2333
+    nodes = [wavelink.Node(uri='http://lavalink:2333', password='youshallnotpass')]
+    await wavelink.Pool.connect(nodes=nodes, client=bot)
 
 bot.setup_hook = setup_hook
 

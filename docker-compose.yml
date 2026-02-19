@@ -14,11 +14,13 @@ services:
     image: ghcr.io/lavalink-devs/lavalink:4
     container_name: lavalink
     ports:
-      - "8080:8080"
+      - "2333:2333" # Mapeia a porta do container para a VPS
     environment:
+      - SERVER_PORT=2333 # <--- ISSO AQUI FORÇA A PORTA 2333
       - LAVALINK_SERVER_PASSWORD=youshallnotpass
     volumes:
       - ./lavalink/application.yml:/opt/lavalink/application.yml
+      - ./lavalink/plugins:/opt/lavalink/plugins
     restart: always
     networks:
       - bot-network

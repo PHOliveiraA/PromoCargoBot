@@ -1,5 +1,5 @@
-server: # Configurações do servidor
-  port: 2333
+server:
+  port: 2333 # <--- Verifique se não está 8080 aqui
   address: 0.0.0.0
 lavalink:
   server:

@@ -31,7 +31,7 @@ emoji_to_role = {
 async def setup_hook():
     # 'uri' usa o nome do serviço definido no docker-compose (lavalink)
     # password deve ser a mesma do application.yml
-    nodes = [wavelink.Node(uri='http://lavalink:2333', password='youshallnotpass')]
+    nodes = [wavelink.Node(uri='http://lavalink:8080', password='youshallnotpass')]
     await wavelink.Pool.connect(nodes=nodes, client=bot, cache_capacity=100)
 
 bot.setup_hook = setup_hook

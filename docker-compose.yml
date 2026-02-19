@@ -1,6 +1,5 @@
 services:
-  promocargobot:
-    # Verifique se o link no seu GitHub Packages é exatamente este:
+  promocargobot:          # 2 espaços de recuo
     image: ghcr.io/pholiveiraa/promocargobot:latest
     container_name: promocargobot
     depends_on:
@@ -10,13 +9,13 @@ services:
     networks:
       - bot-network
 
-  lavalink:
+  lavalink:               # 2 espaços de recuo (IGUAL ao promocargobot)
     image: ghcr.io/lavalink-devs/lavalink:4
     container_name: lavalink
     ports:
-      - "2333:2333" # Mapeia a porta do container para a VPS
+      - "2333:2333"
     environment:
-      - SERVER_PORT=2333 # <--- ISSO AQUI FORÇA A PORTA 2333
+      - SERVER_PORT=2333
       - LAVALINK_SERVER_PASSWORD=youshallnotpass
     volumes:
       - ./lavalink/application.yml:/opt/lavalink/application.yml
@@ -25,6 +24,6 @@ services:
     networks:
       - bot-network
 
-networks:
+networks:                 # Volta para a margem (0 espaços)
   bot-network:
     driver: bridge

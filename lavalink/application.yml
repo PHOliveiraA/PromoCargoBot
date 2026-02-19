@@ -1,35 +1,32 @@
 server:
-  port: 2333 # <--- Verifique se não está 8080 aqui
+  port: 2333
   address: 0.0.0.0
 lavalink:
+  plugins:
+    # Este plugin é o que conserta o erro de "Must find action functions"
+    - dependency: "dev.lavalink.youtube:youtube-plugin:1.11.5"
   server:
     password: "youshallnotpass"
     sources:
-      youtube: true
+      youtube: false # DESATIVAR o nativo (obrigatório para o plugin funcionar)
       soundcloud: true
       bandcamp: true
       twitch: true
       vimeo: true
       http: true
       local: false
-    bufferDurationMs: 400 # Previne engasgos no áudio
+    bufferDurationMs: 400
     frameBufferDurationMs: 5000
     opusEncodingQuality: 10
     resamplingQuality: LOW
     trackStuckThresholdMs: 10000
     useSeekGhosting: true
-    youtubePlaylistLoadLimit: 6 # Limite para não sobrecarregar o IP da VPS
+    youtubePlaylistLoadLimit: 6
     playerUpdateInterval: 5
     youtubeSearchEnabled: true
     soundcloudSearchEnabled: true
     scSearchExpirationLimit: 30
-metrics:
-  prometheus:
-    enabled: false
-    endpoint: /metrics
 logging:
-  file:
-    path: ./logs/lavalink.log
   level:
     root: INFO
     lavalink: INFO

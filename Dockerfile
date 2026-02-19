@@ -4,7 +4,11 @@ FROM python:3.14-slim
 # Define o diretório de trabalho dentro do contêiner
 WORKDIR app
 
-RUN apt update && apt install -y ffmpeg
+# Instala o FFmpeg 7 (que já vimos que sua base Debian 13 suporta)
+RUN apt-get update && apt-get install -y \
+    ffmpeg \
+    libopus-dev \
+    && rm -rf /var/lib/apt/lists/*
 
 # Copia o arquivo requirements.txt (onde você lista suas dependências) para o diretório de trabalho no contêiner
 COPY requirements.txt .
@@ -16,5 +20,4 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 
 # Executa o bot quando o contêiner iniciar
-ENTRYPOINT ["python", "main.py"]
-CMD ["python"]
+CMD ["python", "main.py"]

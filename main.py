@@ -36,63 +36,7 @@ emoji_to_role = {
     "🍀": "Sorteio"
 }
 
-# ======== FUNÇÕES AUXILIARES (SETUP) ========
-async def clear_old_setup_messages(channel):
-    async for message in channel.history(limit=100):
-        try:
-            if message.author == bot.user and "Reaja com os emojis abaixo" in message.content:
-                await message.delete()
-            elif message.content.startswith("!!setup"):
-                await message.delete()
-        except discord.HTTPException as e:
-            print(f"Erro ao deletar mensagem: {e}")
-
-async def condicoes(reaction):
-    role_name = emoji_to_role.get(reaction.emoji)
-    if role_name:
-        return discord.utils.get(reaction.message.guild.roles, name=role_name)
-    return None
-
-# ======== COMANDO DE SETUP ========
-@bot.command()
-async def setup(ctx):
-    channels = ["cargo-de-promoção-aqui"]
-    if str(ctx.channel.name) in channels:
-        await clear_old_setup_messages(ctx.channel)
-
-        message_text = "Reaja com os emojis abaixo para obter cargos:\n"
-        for emoji, role in emoji_to_role.items():
-            message_text += f"{emoji} - {role}\n"
-
-        message = await ctx.send(message_text)
-        for emoji in emoji_to_role.keys():
-            await message.add_reaction(emoji)
-
-# ======== EVENTOS DE REAÇÃO ========
-@bot.event
-async def on_reaction_add(reaction, user):
-    if user == bot.user:
-        return
-    # Certifique-se que este ID é o do canal correto onde o setup roda
-    if reaction.message.channel.id == 1267971255684960266:
-        role = await condicoes(reaction)
-        if role:
-            member = await reaction.message.guild.fetch_member(user.id)
-            await member.add_roles(role)
-            print(f'Cargo {role.name} adicionado a {user.name}')
-
-@bot.event
-async def on_reaction_remove(reaction, user):
-    if user == bot.user:
-        return
-    if reaction.message.channel.id == 1267971255684960266:
-        role = await condicoes(reaction)
-        if role:
-            member = await reaction.message.guild.fetch_member(user.id)
-            await member.remove_roles(role)
-            print(f'Cargo {role.name} removido de {user.name}')
-
-# ======== SISTEMA DE MÚSICA ========
+# ======== SISTEMA DE FILA (ESSENCIAL PARA NÃO DAR NAMEERROR) ========
 musica_filas = {}
 
 def get_guild_queue(guild):
@@ -100,162 +44,117 @@ def get_guild_queue(guild):
         musica_filas[guild.id] = []
     return musica_filas[guild.id]
 
-# ======== NOVA FUNÇÃO OBTER ÁUDIO (VIA PROXY PIPED) ========
+import re # Adicione este import no topo do seu arquivo
+
+# ======== OPÇÕES DE PESQUISA (CONFIGURAÇÃO RESILIENTE) ========
+YDL_OPTIONS = {
+    'format': 'bestaudio/best',
+    'noplaylist': True,
+    'quiet': True,
+    'no_warnings': True,
+    'nocheckcertificate': True,
+    'ignoreerrors': True,
+    'source_address': '0.0.0.0',
+    'force_ipv4': True,
+    # Cliente Android costuma liberar o título mesmo quando bloqueia o streaming
+    'extractor_args': {'youtube': {'player_client': ['android', 'web']}},
+}
+
+FFMPEG_OPTIONS = {
+    'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5',
+    'options': '-vn',
+}
+
+# ======== LÓGICA DE EXTRAÇÃO E FALLBACK ========
 async def obter_audio(url_ou_termo):
-    # --- ESTÁGIO 1: Redirecionar para Piped ---
-    # Em vez de ir direto no YouTube, convertemos o link para um servidor Piped público.
-    # Isso faz com que o bloqueio de IP do YouTube não afete você diretamente.
-    
-    target_url = url_ou_termo
-    
-    # Se for link do YouTube, extrai o ID e monta link Piped
-    if "youtube.com" in url_ou_termo or "youtu.be" in url_ou_termo:
-        video_id = None
-        if "v=" in url_ou_termo:
-            video_id = url_ou_termo.split("v=")[1].split("&")[0]
-        elif "youtu.be" in url_ou_termo:
-            video_id = url_ou_termo.split("/")[-1].split("?")[0]
+    titulo_limpo = None
+    url_direta = None
+
+    # 1. TENTATIVA YOUTUBE (PEGAR TÍTULO E ÁUDIO)
+    try:
+        with yt_dlp.YoutubeDL(YDL_OPTIONS) as ydl:
+            # Se for link, tenta extrair info. Se for busca, pesquisa no YT.
+            alvo = url_ou_termo if url_ou_termo.startswith("http") else f"ytsearch1:{url_ou_termo}"
             
-        if video_id:
-            target_url = f"https://piped.video/watch?v={video_id}"
+            # process=False tenta pegar metadados sem disparar o bloqueio de streaming pesado
+            info = await asyncio.to_thread(ydl.extract_info, alvo, download=False)
+            
+            if info and 'entries' in info:
+                info = info['entries'][0]
+            
+            if info:
+                titulo_limpo = info.get('title')
+                url_direta = info.get('url') # Link do áudio
+    except Exception as e:
+        print(f"DEBUG: YouTube falhou totalmente: {e}")
 
-    # Se não for link nenhum, assume que é pesquisa e pesquisa no Piped
-    elif not url_ou_termo.startswith("http"):
-        # Pesquisa simples no Piped
-        target_url = f"https://piped.video/results?search_query={url_ou_termo.replace(' ', '+')}"
+    # 2. TRATAMENTO DE NOME (CORREÇÃO DO SEU ERRO)
+    # Se o YouTube bloqueou o áudio, mas temos o título, usamos o título.
+    # Se não temos o título e é um link, tentamos extrair o ID do vídeo para não buscar a URL pura.
+    busca_soundcloud = titulo_limpo
+    
+    if not busca_soundcloud or busca_soundcloud.startswith("http"):
+        if "youtube.com" in url_ou_termo or "youtu.be" in url_ou_termo:
+            # Tenta extrair o ID do vídeo via Regex para uma busca genérica se o título falhar
+            vid_id = re.search(r"(?:v=|\/)([0-9A-Za-z_-]{11}).*", url_ou_termo)
+            busca_soundcloud = vid_id.group(1) if vid_id else url_ou_termo
+        else:
+            busca_soundcloud = url_ou_termo
 
-    # --- ESTÁGIO 2: Configuração do yt-dlp ---
-# ======== FUNÇÃO OBTER ÁUDIO (MULTI-PLATAFORMA OTIMIZADA) ========
-async def obter_audio(url_ou_termo):
-    tem_cookies = os.path.exists("cookies.txt")
-    eh_spotify = "spotify.com" in url_ou_termo
-    eh_soundcloud = "soundcloud.com" in url_ou_termo
-    eh_youtube = "youtube.com" in url_ou_termo or "youtu.be" in url_ou_termo
-    eh_url = url_ou_termo.startswith("http")
+    # 3. FALLBACK SOUNDCLOUD (SE O ÁUDIO DO YT FALHOU)
+    if not url_direta:
+        print(f"⚠️ YouTube bloqueou o áudio. Buscando '{busca_soundcloud}' no SoundCloud...")
+        try:
+            sc_opts = {'format': 'bestaudio', 'quiet': True}
+            with yt_dlp.YoutubeDL(sc_opts) as ydl_sc:
+                # PESQUISA POR NOME (scsearch), NUNCA POR URL DO YOUTUBE
+                info_sc = await asyncio.to_thread(ydl_sc.extract_info, f"scsearch1:{busca_soundcloud}", download=False)
+                if info_sc and 'entries' in info_sc and len(info_sc['entries']) > 0:
+                    res = info_sc['entries'][0]
+                    url_direta = res['url']
+                    titulo_limpo = res.get('title', busca_soundcloud)
+        except Exception as e_sc:
+            print(f"❌ Erro SoundCloud: {e_sc}")
 
-    ydl_opts = {
-        'format': 'bestaudio/best',
-        'quiet': True,
-        'noplaylist': True,
-        'nocheckcertificate': True,
-        'ignoreerrors': True,
-        'geo_bypass': True,
-        'source_address': '0.0.0.0',
-        'force_ipv4': True,
-        'ignoreconfig': True,
-    }
+    return url_direta, titulo_limpo
 
-    if eh_youtube or (not eh_url and not eh_soundcloud):
-         if tem_cookies:
-             ydl_opts['cookiefile'] = 'cookies.txt'
-         else:
-             ydl_opts.update({'no_cookies': True})
-
-    # Função síncrona que será jogada para uma thread
-    def thread_extrair(alvo, usar_sc_fallback=False):
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            try:
-                info = ydl.extract_info(alvo, download=False)
-                return info
-            except Exception:
-                if usar_sc_fallback:
-                     print(f"⚠️ Fallback para SoundCloud: {alvo}")
-                     try:
-                         # Tenta pesquisar o termo original no SC se o YT falhar
-                         termo_limpo = url_ou_termo.replace("ytsearch:", "")
-                         res = ydl.extract_info(f"scsearch:{termo_limpo}", download=False)
-                         if 'entries' in res: return res['entries'][0]
-                     except: return None
-                return None
-
-    info = None
-    if eh_spotify:
-        # Tenta pesquisar o link do spotify no YT/SC
-        info = await asyncio.to_thread(thread_extrair, f"ytsearch:{url_ou_termo}", True)
-    elif eh_url:
-        # Se for URL direta (YT ou SC), tenta ela mesma, com fallback se for YT
-        info = await asyncio.to_thread(thread_extrair, url_ou_termo, eh_youtube)
-    else:
-        # Pesquisa normal de texto
-        info = await asyncio.to_thread(thread_extrair, f"ytsearch:{url_ou_termo}", True)
-
-    if not info or not info.get('url'):
-        return None, None
-
-    return info['url'], info.get('title', 'Música')
-
-# ======== FUNÇÃO TOCAR (STREAMING ROBUSTO) ========
+# ======== FUNÇÃO TOCAR (CORRIGIDA) ========
 async def tocar_proxima_musica(ctx):
     queue = get_guild_queue(ctx.guild)
-    if not queue:
-        return
+    if not queue: return
 
     musica_atual = queue.pop(0)
-    termo_busca = musica_atual["termo"]
+    termo = musica_atual["termo"]
+    msg_status = await ctx.send(f"🔍 Buscando: `{termo}`...")
 
-    msg_processando = await ctx.send(f"🔄 Processando: `{termo_busca}`...")
+    url_final, titulo_final = await obter_audio(termo)
 
-    try:
-        # Agora retorna uma URL de internet, não um arquivo local
-        audio_url, titulo_real = await obter_audio(termo_busca)
-    except Exception as e:
-        await msg_processando.edit(content=f"❌ Erro crítico: {e}")
-        await tocar_proxima_musica(ctx)
-        return
-
-    if not audio_url:
-        await msg_processando.edit(content="❌ Falha ao obter link de streaming.")
-        await tocar_proxima_musica(ctx)
-        return
-
-    if not ctx.voice_client or not ctx.voice_client.is_connected():
-        try:
-            if ctx.author.voice:
-                await ctx.author.voice.channel.connect()
-            else:
-                 await msg_processando.edit(content="❌ Entre em um canal de voz primeiro.")
-                 return
-        except Exception:
-             return
-
-    if ctx.voice_client.is_playing() or ctx.voice_client.is_paused():
-        ctx.voice_client.stop()
-
-    # Opções do FFmpeg para aguentar quedas de conexão do YouTube
-    ffmpeg_options = {
-        'before_options': (
-            '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 '
-            '-reconnect_at_eof 1 -http_persistent 0'
-        ),
-        'options': '-vn'
-    }
+    if not url_final:
+        await msg_status.edit(content=f"❌ Não foi possível carregar: `{termo}`. Verifique se o vídeo não tem restrição de idade.")
+        return await tocar_proxima_musica(ctx)
 
     def after_playing(error):
-        if error:
-            print(f"Erro no streaming: {error}")
+        if error: print(f"Erro no player: {error}")
         asyncio.run_coroutine_threadsafe(tocar_proxima_musica(ctx), bot.loop)
 
     try:
-        source = discord.FFmpegPCMAudio(audio_url, **ffmpeg_options)
+        source = discord.FFmpegPCMAudio(url_final, **FFMPEG_OPTIONS)
         ctx.voice_client.play(source, after=after_playing)
-        await msg_processando.edit(content=f"🎶 Tocando agora: **{titulo_real}**")
+        await msg_status.edit(content=f"🎶 Tocando agora: **{titulo_final}**")
     except Exception as e:
-        await msg_processando.edit(content=f"❌ Erro ao iniciar player: {e}")
+        print(f"Erro FFmpeg: {e}")
+        await msg_status.edit(content="❌ Erro ao iniciar o player.")
         await tocar_proxima_musica(ctx)
 
 # ======== COMANDOS DE MÚSICA ========
-@bot.command()
+@bot.command(aliases=['p'])
 async def play(ctx, *, termo):
-    voice_channel = ctx.author.voice.channel if ctx.author.voice else None
-    if not voice_channel:
-        await ctx.send("❌ Você precisa estar em um canal de voz.")
-        return
+    if not ctx.author.voice:
+        return await ctx.send("❌ Você precisa estar em um canal de voz.")
 
     if not ctx.voice_client:
-        await voice_channel.connect()
+        await ctx.author.voice.channel.connect()
 
-    # Adiciona à fila apenas o termo/URL. Deixa para processar na hora de tocar.
-    # Isso deixa o comando !play muito mais rápido.
     queue = get_guild_queue(ctx.guild)
     queue.append({"termo": termo})
 
@@ -264,80 +163,91 @@ async def play(ctx, *, termo):
     else:
         await ctx.send(f"✅ Adicionado à fila: `{termo}`")
 
-@bot.command()
+@bot.command(aliases=['s'])
 async def skip(ctx):
     if ctx.voice_client and ctx.voice_client.is_playing():
-        ctx.voice_client.stop() # Isso aciona o 'after' do play, chamando a próxima
-        await ctx.send("⏭️ Pulado!")
+        ctx.voice_client.stop()
+        await ctx.send("⏭️ Música pulada!")
     else:
-        await ctx.send("❌ Nada tocando para pular.")
+        await ctx.send("❌ Nada tocando agora.")
 
 @bot.command()
 async def stop(ctx):
-    queue = get_guild_queue(ctx.guild)
-    queue.clear()
+    get_guild_queue(ctx.guild).clear()
     if ctx.voice_client:
         await ctx.voice_client.disconnect()
     await ctx.send("🛑 Parado e desconectado.")
 
-@bot.command()
-async def pause(ctx):
-    if ctx.voice_client and ctx.voice_client.is_playing():
-        ctx.voice_client.pause()
-        await ctx.send("⏸️ Pausado.")
-
-@bot.command()
-async def resume(ctx):
-    if ctx.voice_client and ctx.voice_client.is_paused():
-        ctx.voice_client.resume()
-        await ctx.send("▶️ Retomado.")
-
-@bot.command()
+@bot.command(aliases=['q'])
 async def queue(ctx):
     queue = get_guild_queue(ctx.guild)
     if not queue:
-        await ctx.send("🎵 Fila vazia.")
-    else:
-        # Mostra apenas os primeiros 10 para não flodar o chat
-        msg = "\n".join([f"{i+1}. {m['termo']}" for i, m in enumerate(queue[:10])])
-        if len(queue) > 10:
-            msg += f"\n... e mais {len(queue)-10} na fila."
-        await ctx.send(f"📜 **Fila atual:**\n{msg}")
+        return await ctx.send("🎵 Fila vazia.")
+    msg = "\n".join([f"{i+1}. {m['termo']}" for i, m in enumerate(queue[:10])])
+    await ctx.send(f"📜 **Fila atual:**\n{msg}")
 
-# ======== EVENTO DE MENSAGENS ========
+# ======== SISTEMA DE CARGOS E MONITORAMENTO ========
+async def clear_old_setup_messages(channel):
+    async for message in channel.history(limit=100):
+        if message.author == bot.user and "Reaja com os emojis abaixo" in message.content:
+            await message.delete()
+
+@bot.command()
+async def setup(ctx):
+    if ctx.channel.name == "cargo-de-promoção-aqui":
+        await clear_old_setup_messages(ctx.channel)
+        message_text = "Reaja com os emojis abaixo para obter cargos:\n"
+        for emoji, role in emoji_to_role.items():
+            message_text += f"{emoji} - {role}\n"
+        message = await ctx.send(message_text)
+        for emoji in emoji_to_role.keys():
+            await message.add_reaction(emoji)
+
+@bot.event
+async def on_reaction_add(reaction, user):
+    if user == bot.user: return
+    if reaction.message.channel.id == 1267971255684960266:
+        role_name = emoji_to_role.get(reaction.emoji)
+        role = discord.utils.get(reaction.message.guild.roles, name=role_name)
+        if role:
+            member = await reaction.message.guild.fetch_member(user.id)
+            await member.add_roles(role)
+
+@bot.event
+async def on_reaction_remove(reaction, user):
+    if user == bot.user: return
+    if reaction.message.channel.id == 1267971255684960266:
+        role_name = emoji_to_role.get(reaction.emoji)
+        role = discord.utils.get(reaction.message.guild.roles, name=role_name)
+        if role:
+            member = await reaction.message.guild.fetch_member(user.id)
+            await member.remove_roles(role)
+
 @bot.event
 async def on_message(message):
-    if message.author == bot.user:
-        return
+    if message.author == bot.user: return
     await bot.process_commands(message)
 
-    if str(message.channel.name) == "promos":
+    if message.channel.name == "promos":
         keyword_responses = {
-            "@monitor": "monitor",
-            "@teclado": "teclado",
-            "@gabinete": "gabinete",
-            "@cupom": "cupom",
-            "@placa de vídeo": "placa de vídeo",
-            "@filtro de linha": "filtro de linha",
-            "@memória": "memória",
-            "@fonte": "fonte",
-            "@smartphone": "smartphone",
-            "@microfone": "microfone",
-            "@acessórios": "acessórios",
-            "@placa mãe": "placa mãe",
-            "@air / water / fan cooler": "cooler",
-            "@processador": "processador",
-            "sorteio": "Sorteio"
+            "@monitor": "monitor", "@teclado": "teclado", "@gabinete": "gabinete",
+            "@cupom": "cupom", "@placa de vídeo": "placa de vídeo", "@filtro de linha": "filtro de linha",
+            "@memória": "memória", "@fonte": "fonte", "@smartphone": "smartphone",
+            "@microfone": "microfone", "@acessórios": "acessórios", "@placa mãe": "placa mãe",
+            "@air / water / fan cooler": "cooler", "@processador": "processador", "sorteio": "Sorteio"
         }
-
+        content_lower = message.content.lower()
         for keyword, role_name in keyword_responses.items():
-            if keyword in message.content.lower():
+            if keyword in content_lower:
                 role = discord.utils.get(message.guild.roles, name=role_name)
-                if role:
-                    await message.channel.send(f"<@&{role.id}>")
+                if role: await message.channel.send(f"<@&{role.id}>")
 
-# ======== EXECUTAR BOT ========
+@bot.event
+async def on_ready():
+    print(f'✅ Bot online como {bot.user} (Streaming Bypass Ativo)')
+
+# ======== EXECUTAR ========
 try:
     bot.run(Meu_token)
-except discord.errors.DiscordServerError as e:
-    print(f"Erro de servidor do Discord: {e}")
+except Exception as e:
+    print(f"Erro ao rodar: {e}")

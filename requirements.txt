@@ -1,4 +1,4 @@
 discord.py[voice]>=2.6.4
 python-dotenv>=1.2.1
-yt-dlp>=2025.10.22
+yt-dlp>=2026.2.4
 ffmpeg-python>=0.2.0

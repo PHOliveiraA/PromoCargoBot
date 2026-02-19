@@ -27,6 +27,7 @@ emoji_to_role = {
 }
 
 # ======== CONFIGURAÇÕES DE MÚSICA ========
+
 YDL_OPTIONS = {
     'format': 'bestaudio/best',
     'noplaylist': True,
@@ -37,16 +38,16 @@ YDL_OPTIONS = {
     'source_address': '0.0.0.0',
     'force_ipv4': True,
     'cookiefile': 'cookies.txt' if os.path.exists("cookies.txt") else None,
-    # Alternando clientes para tentar burlar o "format not available"
-    'extractor_args': {'youtube': {'player_client': ['android', 'web', 'tv']}},
+    # Tentando usar o cliente de Android Music, que é o mais resistente hoje
+    'extractor_args': {'youtube': {'player_client': ['android_music']}},
 }
 
-# CONFIGURAÇÃO "VALE-TUDO" DO FFMPEG (Resolve o erro de allowed_segment_extensions)
+# ESSA É A PARTE QUE CORRIGE O ERRO DO SOUNDCLOUD NO DOCKER
 FFMPEG_OPTIONS = {
     'before_options': (
         '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 '
-        '-protocol_whitelist file,http,https,tcp,tls,crypto ' # Permite todos os protocolos
-        '-allowed_extensions ALL' # Permite todas as extensões (FIX do SoundCloud)
+        '-protocol_whitelist file,http,https,tcp,tls,crypto '
+        '-allowed_extensions ALL' # <--- ISSO AQUI MATA O ERRO "is not in allowed_segment_extensions"
     ),
     'options': '-vn',
 }
@@ -58,7 +59,8 @@ def get_guild_queue(guild_id):
         musica_filas[guild_id] = []
     return musica_filas[guild_id]
 
-# ======== LÓGICA DE BUSCA LIMPA ========
+# ======== LÓGICA DE EXTRAÇÃO COM TRATAMENTO DE ERROS ========
+
 async def obter_audio(url_ou_termo):
     url_final = None
     titulo_final = url_ou_termo
@@ -66,9 +68,8 @@ async def obter_audio(url_ou_termo):
     # 1. TENTATIVA YOUTUBE
     try:
         with yt_dlp.YoutubeDL(YDL_OPTIONS) as ydl:
-            # Se for link, tenta extrair. Se for texto, pesquisa no YT.
-            alvo = url_ou_termo if url_ou_termo.startswith("http") else f"ytsearch1:{url_ou_termo}"
-            info = await asyncio.to_thread(ydl.extract_info, alvo, download=False)
+            busca = f"ytsearch1:{url_ou_termo}" if not url_ou_termo.startswith("http") else url_ou_termo
+            info = await asyncio.to_thread(ydl.extract_info, busca, download=False)
             
             if info and 'entries' in info:
                 info = info['entries'][0]
@@ -76,28 +77,26 @@ async def obter_audio(url_ou_termo):
             if info and 'url' in info:
                 url_final = info['url']
                 titulo_final = info.get('title', url_ou_termo)
-                print(f"✅ Sucesso YouTube: {titulo_final}")
     except Exception as e:
-        print(f"❌ YouTube bloqueou: {e}")
+        print(f"❌ YouTube falhou: {e}")
 
-    # 2. FALLBACK SOUNDCLOUD (SÓ PESQUISA SE O YT FALHAR)
+    # 2. FALLBACK SOUNDCLOUD (SE O YT FALHAR)
     if not url_final:
-        # Extração de Título/ID para não enviar link do YT pro SoundCloud
+        # Limpamos o termo para não mandar o link do YT para o SoundCloud
         termo_sc = titulo_final
         if "youtube.com" in termo_sc or "youtu.be" in termo_sc:
-            vid_id = re.search(r"(?:v=|\/)([0-9A-Za-z_-]{11})", termo_sc)
-            termo_sc = vid_id.group(1) if vid_id else "musica"
+            video_id = re.search(r"(?:v=|\/)([0-9A-Za-z_-]{11})", termo_sc)
+            termo_sc = video_id.group(1) if video_id else "música"
 
-        print(f"⚠️ Buscando '{termo_sc}' no SoundCloud...")
+        print(f"⚠️ YouTube bloqueou. Buscando '{termo_sc}' no SoundCloud...")
         try:
-            # SoundCloud Options (Geralmente não precisa de cookies)
+            # Opções simplificadas para o SoundCloud
             with yt_dlp.YoutubeDL({'format': 'bestaudio', 'quiet': True}) as ydl_sc:
                 info_sc = await asyncio.to_thread(ydl_sc.extract_info, f"scsearch1:{termo_sc}", download=False)
-                if info_sc and 'entries' in info_sc:
+                if info_sc and 'entries' in info_sc and len(info_sc['entries']) > 0:
                     res = info_sc['entries'][0]
                     url_final = res['url']
                     titulo_final = res.get('title', termo_sc)
-                    print(f"✅ Sucesso SoundCloud: {titulo_final}")
         except Exception as e_sc:
             print(f"❌ Erro SoundCloud: {e_sc}")
 
@@ -109,26 +108,29 @@ async def tocar_proxima_musica(ctx):
 
     musica_atual = queue.pop(0)
     termo = musica_atual["termo"]
-    msg = await ctx.send(f"🔍 Buscando áudio: `{termo}`...")
+    msg_status = await ctx.send(f"🔍 Buscando áudio: `{termo}`...")
 
     url_final, titulo_final = await obter_audio(termo)
 
     if not url_final:
-        await msg.edit(content="❌ Erro: Não encontrei áudio para esta música.")
+        await msg_status.edit(content="❌ Erro: Não consegui carregar essa música em nenhuma fonte.")
         return await tocar_proxima_musica(ctx)
 
     def after_playing(error):
+        if error: print(f"Erro no player: {error}")
         asyncio.run_coroutine_threadsafe(tocar_proxima_musica(ctx), bot.loop)
 
     try:
+        # Aplicando as opções corrigidas diretamente aqui
         source = discord.FFmpegPCMAudio(url_final, **FFMPEG_OPTIONS)
         ctx.voice_client.play(source, after=after_playing)
-        await msg.edit(content=f"🎶 Tocando agora: **{titulo_final}**")
+        await msg_status.edit(content=f"🎶 Tocando agora: **{titulo_final}**")
     except Exception as e:
         print(f"Erro FFmpeg: {e}")
         await tocar_proxima_musica(ctx)
 
 # ======== COMANDOS ========
+
 @bot.command(aliases=['p'])
 async def play(ctx, *, termo):
     if not ctx.author.voice:
@@ -154,9 +156,10 @@ async def stop(ctx):
     get_guild_queue(ctx.guild.id).clear()
     if ctx.voice_client:
         await ctx.voice_client.disconnect()
-    await ctx.send("🛑 Parado.")
+    await ctx.send("🛑 Parado e desconectado.")
 
-# ======== RESTO DO CÓDIGO (CARGOS) ========
+# ======== SISTEMA DE CARGOS E SETUP (MANTIDO) ========
+
 @bot.command()
 async def setup(ctx):
     if ctx.channel.name == "cargo-de-promoção-aqui":

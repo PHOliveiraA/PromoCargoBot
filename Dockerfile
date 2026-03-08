@@ -1,23 +1,21 @@
-# Use uma imagem base oficial do Python
+# Use uma imagem base leve do Python
 FROM python:3.12-slim
 
-# Define o diretório de trabalho dentro do contêiner
-WORKDIR app
+# Define o diretório de trabalho
+WORKDIR /app
 
-# Instala o FFmpeg 7 (que já vimos que sua base Debian 13 suporta)
-RUN apt-get update && apt-get install -y \
-    ffmpeg \
-    libopus-dev \
-    && rm -rf /var/lib/apt/lists/*
+# Instala apenas dependências essenciais do sistema (se houver)
+# Para um bot de texto puro, geralmente não precisamos de pacotes apt-get adicionais.
+# Se no futuro precisar de algo, você adiciona aqui.
 
-# Copia o arquivo requirements.txt (onde você lista suas dependências) para o diretório de trabalho no contêiner
+# Copia apenas o requirements.txt primeiro para aproveitar o cache do Docker
 COPY requirements.txt .
 
-# Instala as dependências do Python listadas no requirements.txt
+# Instala as dependências do Python (discord.py e python-dotenv)
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copia o restante dos arquivos da aplicação para o contêiner
+# Copia o restante dos arquivos (main.py, .env, etc)
 COPY . .
 
-# Executa o bot quando o contêiner iniciar
+# Comando para rodar o bot
 CMD ["python", "main.py"]

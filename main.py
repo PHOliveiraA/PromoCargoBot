@@ -2,9 +2,6 @@ import discord
 from discord.ext import commands
 import os
 from dotenv import load_dotenv
-import asyncio
-import wavelink  # Motor de áudio Lavalink
-import re
 
 # ======== CONFIGURAÇÕES INICIAIS ========
 intents = discord.Intents.default()
@@ -18,6 +15,9 @@ bot = commands.Bot(command_prefix='!!', intents=intents)
 load_dotenv()
 Meu_token = os.getenv("DISCORD_TOKEN")
 
+# Nome do canal onde os logs serão enviados
+NOME_CANAL_LOGS = "logs-do-bot"
+
 # ======== DICIONÁRIO DE CARGOS ========
 emoji_to_role = {
     "📺": "monitor", "⌨️": "teclado", "📨": "cupom", "🗄️": "gabinete",
@@ -26,62 +26,21 @@ emoji_to_role = {
     "👩‍👦": "placa mãe", "🆒": "cooler", "⏹️": "processador", "🍀": "Sorteio"
 }
 
-# ======== CONEXÃO COM O LAVALINK ========
-
-async def setup_hook():
-    # O host é 'lavalink' (nome do container) e a porta é 2333
-    nodes = [wavelink.Node(uri='http://lavalink:2333', password='youshallnotpass')]
-    await wavelink.Pool.connect(nodes=nodes, client=bot)
-
-bot.setup_hook = setup_hook
-
-# ======== COMANDOS DE MÚSICA (WAVELINK) ========
-
-@bot.command(aliases=['p'])
-async def play(ctx, *, busca: str):
-    """Toca uma música do YouTube ou SoundCloud via Lavalink"""
-    if not ctx.author.voice:
-        return await ctx.send("❌ Você precisa estar em um canal de voz.")
-
-    # Conecta ao canal ou obtém o player existente
-    if not ctx.voice_client:
-        vc: wavelink.Player = await ctx.author.voice.channel.connect(cls=wavelink.Player)
-    else:
-        vc: wavelink.Player = ctx.voice_client
-
-    # Faz a busca (Lavalink lida com a extração automaticamente)
-    # Por padrão, busca no YouTube, mas aceita links do SoundCloud
-    tracks = await wavelink.Playable.search(busca)
+# ======== FUNÇÃO AUXILIAR DE LOG ========
+async def enviar_log(guild, texto, cor):
+    """Envia uma mensagem para o canal de logs"""
+    canal_log = discord.utils.get(guild.text_channels, name=NOME_CANAL_LOGS)
     
-    if not tracks:
-        return await ctx.send("❌ Não encontrei nada com esse nome ou link.")
+    # Se o canal de log não existir, o bot tenta criar um
+    if not canal_log:
+        try:
+            canal_log = await guild.create_text_channel(NOME_CANAL_LOGS)
+            await canal_log.send(f"🛠️ Canal de logs criado automaticamente.")
+        except:
+            return # Se não tiver permissão para criar, ignora
 
-    track = tracks[0]
-    await vc.play(track)
-    
-    embed = discord.Embed(title="🎶 Tocando Agora", description=f"**{track.title}**", color=discord.Color.blue())
-    if track.artwork:
-        embed.set_thumbnail(url=track.artwork)
-    
-    await ctx.send(embed=embed)
-
-@bot.command(aliases=['s'])
-async def skip(ctx):
-    """Pula a música atual"""
-    vc: wavelink.Player = ctx.voice_client
-    if vc and vc.playing:
-        await vc.skip()
-        await ctx.send("⏭️ Música pulada!")
-    else:
-        await ctx.send("❌ Não há nada tocando para pular.")
-
-@bot.command()
-async def stop(ctx):
-    """Para o player e desconecta o bot"""
-    vc: wavelink.Player = ctx.voice_client
-    if vc:
-        await vc.disconnect()
-        await ctx.send("🛑 Player parado e desconectado.")
+    embed = discord.Embed(description=texto, color=cor)
+    await canal_log.send(embed=embed)
 
 # ======== SISTEMA DE CARGOS POR REAÇÃO ========
 
@@ -89,7 +48,6 @@ async def stop(ctx):
 async def setup(ctx):
     """Configura a mensagem de reação para cargos"""
     if ctx.channel.name == "cargo-de-promoção-aqui":
-        # Limpa mensagens antigas do bot no canal
         async for m in ctx.channel.history(limit=50):
             if m.author == bot.user: await m.delete()
         
@@ -104,7 +62,7 @@ async def setup(ctx):
 @bot.event
 async def on_reaction_add(reaction, user):
     if user == bot.user: return
-    # Filtra pelo ID do canal de cargos
+    # ID do canal de cargos que você já usa
     if reaction.message.channel.id == 1267971255684960266:
         role_name = emoji_to_role.get(str(reaction.emoji))
         if role_name:
@@ -112,6 +70,12 @@ async def on_reaction_add(reaction, user):
             if role:
                 member = await reaction.message.guild.fetch_member(user.id)
                 await member.add_roles(role)
+                # Log de adição
+                await enviar_log(
+                    reaction.message.guild, 
+                    f"✅ **{user.display_name}** adquiriu o cargo `{role.name}` via reação.",
+                    discord.Color.green()
+                )
 
 @bot.event
 async def on_reaction_remove(reaction, user):
@@ -123,6 +87,12 @@ async def on_reaction_remove(reaction, user):
             if role:
                 member = await reaction.message.guild.fetch_member(user.id)
                 await member.remove_roles(role)
+                # Log de remoção
+                await enviar_log(
+                    reaction.message.guild, 
+                    f"❌ **{user.display_name}** removeu o cargo `{role.name}`.",
+                    discord.Color.red()
+                )
 
 # ======== MONITOR DE PROMOÇÕES (TAGS AUTOMÁTICAS) ========
 
@@ -131,7 +101,6 @@ async def on_message(message):
     if message.author == bot.user: return
     await bot.process_commands(message)
 
-    # Monitora o canal de promoções para marcar os cargos
     if message.channel.name == "promos":
         keywords = {
             "@monitor": "monitor", "@teclado": "teclado", "@gabinete": "gabinete",
@@ -143,10 +112,16 @@ async def on_message(message):
                 role = discord.utils.get(message.guild.roles, name=role_name)
                 if role:
                     await message.channel.send(f"<@&{role.id}>")
+                    # Log de marcação automática
+                    await enviar_log(
+                        message.guild,
+                        f"📢 Cargo `{role.name}` foi marcado automaticamente no canal {message.channel.mention}.",
+                        discord.Color.blue()
+                    )
 
 @bot.event
 async def on_ready():
     print(f'✅ Bot Online: {bot.user}')
-    print(f'🚀 Sistema de Música: Lavalink Node Conectado')
+    print(f'📝 Logs ativos no canal: {NOME_CANAL_LOGS}')
 
 bot.run(Meu_token)
